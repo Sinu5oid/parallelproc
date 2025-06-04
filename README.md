@@ -65,8 +65,8 @@ func main() {
   <-p2.Done()
 
   // wait for result and error to be resolved (use channel result type)
-  _ = <-p3.ResultChannel() // use result from channel (string "")
-  _ = <-p3.ErrorChannel()  // use error from channel (error "always fails")
+  _ = <-p3.ResultChan() // use result from channel (string "")
+  _ = <-p3.ErrorChan()  // use error from channel (error "always fails")
 
   p5 := parallelproc.NewProcess(executor)
   p6 := parallelproc.NewProcess(executor)
@@ -76,13 +76,13 @@ func main() {
   time.AfterFunc(100 * time.Millisecond, func () {
     p5.Close()
   })
-  p5.Error() // error context.Canceled
+  _ = p5.Error() // error context.Canceled
 
   // ... or with context.WithTimeout / context.WithDeadline() / context.WithCancel
   timedCtx, cancel := context.WithTimeout(ctx, time.Millisecond)
   defer cancel()
   p6.Execute(timedCtx)
-  p6.Error() // error context.Canceled
+  _ = p6.Error() // error context.Canceled
 }
 
 // externally defined executor function
