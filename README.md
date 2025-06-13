@@ -8,7 +8,7 @@ This repository contains a distributable package with convenient typed wrapper f
 ## Install the package
 
 ```
-$ go get gituhb.com/sinu5oid/parallelproc
+$ go get github.com/sinu5oid/parallelproc
 ```
 
 ## Minimal example
