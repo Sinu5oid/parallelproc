@@ -5,6 +5,7 @@ package parallelproc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 )
@@ -43,10 +44,10 @@ func NewProcess[T any](executor Executor[T]) *Process[T] {
 	}
 }
 
-// Close closes the Done channel, and disposes of inner sync values, and cancels current Execute
+// Close closes the Done channel and disposes of inner sync values and cancels the current Execute
 // flow with context.Canceled error.
 //
-// Close will never return non-nil error.
+// Close will never return a non-nil error.
 func (p *Process[T]) Close() error {
 	if p.closed {
 		return nil
@@ -55,21 +56,21 @@ func (p *Process[T]) Close() error {
 	p.closed = true
 	close(p.doneChan)
 	p.lock.Do(func() {
-		// dispose of lock
+		// dispose of the lock
 	})
 	return nil
 }
 
-// Execute calls the inner executor with provided context only once, then modifies
-// internal state appropriately.
+// Execute calls the inner executor with provided context only once, then modifies the internal
+// state appropriately.
 //
 // The method never blocks. If internal executor call results to a panic, Error will be replaced
-// with panic value. If Execute finishes normally, it internally calls Close, and disposes of the
-// resources. Calling Execute after Close or Execute again will have no effect.
+// with the current value joined with a panic value. If Execute finishes normally, it internally
+// calls Close, and disposes of the resources. Calling Execute after Close or Execute again will
+// have no effect.
 func (p *Process[T]) Execute(ctx context.Context) {
 	p.lock.Do(func() {
 		execCtx, cancel := context.WithCancel(ctx)
-		defer cancel()
 
 		go func() {
 			// stop execution on premature Close call
@@ -79,11 +80,12 @@ func (p *Process[T]) Execute(ctx context.Context) {
 
 		go func() {
 			defer p.Close()
+			defer cancel()
 			defer func() {
 				// recover from panic in the executor, replace error with wrapped panic
 				r := recover()
 				if r != nil {
-					p.err = fmt.Errorf("executor panicked: %v", r)
+					p.err = errors.Join(p.err, fmt.Errorf("executor panicked: %v", r))
 				}
 			}()
 
