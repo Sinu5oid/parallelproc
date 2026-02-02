@@ -27,36 +27,28 @@ type Executor[T any] func(context.Context) (T, error)
 // and Error will contain wrapped panic value.
 type Process[T any] struct {
 	executor Executor[T]
-	res      *T
+	res      T
 	err      error
-	closed   bool
+
 	doneChan chan struct{}
-	lock     sync.Once
+	onceExec sync.Once
+	onceDone sync.Once
 }
 
 func NewProcess[T any](executor Executor[T]) *Process[T] {
 	return &Process[T]{
 		executor: executor,
-		res:      nil,
-		err:      nil,
-		lock:     sync.Once{},
 		doneChan: make(chan struct{}),
 	}
 }
 
-// Close closes the Done channel and disposes of inner sync values and cancels the current Execute
-// flow with context.Canceled error.
+// Close closes the [Done] channel and disposes of inner sync values and cancels the current [Execute]
+// flow.
 //
 // Close will never return a non-nil error.
 func (p *Process[T]) Close() error {
-	if p.closed {
-		return nil
-	}
-
-	p.closed = true
-	close(p.doneChan)
-	p.lock.Do(func() {
-		// dispose of the lock
+	p.onceDone.Do(func() {
+		close(p.doneChan)
 	})
 	return nil
 }
@@ -64,23 +56,25 @@ func (p *Process[T]) Close() error {
 // Execute calls the inner executor with provided context only once, then modifies the internal
 // state appropriately.
 //
-// The method never blocks. If internal executor call results to a panic, Error will be replaced
+// The method never blocks. If internal executor call results to a panic, [Error] will be replaced
 // with the current value joined with a panic value. If Execute finishes normally, it internally
-// calls Close, and disposes of the resources. Calling Execute after Close or Execute again will
+// calls [Close], and disposes of the resources. Calling [Execute] after [Close] or [Execute] again will
 // have no effect.
 func (p *Process[T]) Execute(ctx context.Context) {
-	p.lock.Do(func() {
+	p.onceExec.Do(func() {
 		execCtx, cancel := context.WithCancel(ctx)
 
 		go func() {
-			// stop execution on premature Close call
-			<-p.doneChan
+			select {
+			case <-p.doneChan: // finished normally
+			case <-ctx.Done(): // ctx canceled / timed out
+			}
+
 			cancel()
 		}()
 
 		go func() {
 			defer p.Close()
-			defer cancel()
 			defer func() {
 				// recover from panic in the executor, replace error with wrapped panic
 				r := recover()
@@ -89,9 +83,11 @@ func (p *Process[T]) Execute(ctx context.Context) {
 				}
 			}()
 
-			res, err := p.executor(execCtx)
-			p.res = &res
-			p.err = err
+			p.res, p.err = p.executor(execCtx)
+
+			if p.err == nil && execCtx.Err() != nil {
+				p.err = execCtx.Err()
+			}
 		}()
 	})
 }
@@ -103,15 +99,18 @@ func (p *Process[T]) Done() <-chan struct{} {
 	return p.doneChan
 }
 
-// Result blocks the execution until either Close is called (will return an undefined value)
-// or Execute finishes execution (will return the result of execution)
+// Result2 returns result and error together (as if [Process.Result]
+// and [Process.Error] methods return is merged)
+func (p *Process[T]) Result2() (T, error) {
+	<-p.doneChan
+	return p.res, p.err
+}
+
+// Result blocks the execution until either [Close] is called (will return an undefined value)
+// or [Execute] finishes execution (will return the result of execution)
 func (p *Process[T]) Result() T {
 	<-p.doneChan
-	if p.res == nil {
-		return *new(T)
-	}
-
-	return *p.res
+	return p.res
 }
 
 // ResultChan returns the channel with the execution result with the same logic as Result,
@@ -122,7 +121,8 @@ func (p *Process[T]) ResultChan() <-chan T {
 
 	go func() {
 		defer close(c)
-		c <- p.Result()
+		<-p.doneChan
+		c <- p.res
 	}()
 
 	return c
@@ -139,10 +139,10 @@ func (p *Process[T]) Error() error {
 // blocks. Calling the method several times yields different channels with the copy of Error value.
 func (p *Process[T]) ErrorChan() <-chan error {
 	c := make(chan error, 1)
-
 	go func() {
-		defer close(c)
-		c <- p.Error()
+		<-p.doneChan
+		c <- p.err
+		close(c)
 	}()
 
 	return c
